@@ -22,27 +22,76 @@ import {
 } from './types.js';
 import { logger } from './utils/logger.js';
 
-/**
- * Recursively removes fields from a JSON schema that are not supported by the
- * Gemini API.
- * @param schema The JSON schema to sanitize.
- * @returns A new schema object without the unsupported fields.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const UNSUPPORTED_KEYS = new Set([
+  '$schema', '$ref', 'ref', '$defs', 'definitions',
+  'additionalProperties', 'patternProperties',
+  'exclusiveMinimum', 'exclusiveMaximum',
+  'oneOf', 'anyOf', 'allOf', 'not',
+  'if', 'then', 'else',
+  'dependentSchemas', 'dependentRequired',
+  'unevaluatedProperties', 'unevaluatedItems',
+  'contentEncoding', 'contentMediaType',
+]);
+
+function resolveRef(schema: any, root: any): any {
+  if (typeof schema !== 'object' || schema === null) return schema;
+  const refValue = schema.$ref || schema.ref;
+  if (refValue) {
+    const defs = root.$defs || root.definitions || {};
+    if (typeof refValue === 'string') {
+      let defName: string | null = null;
+      if (refValue.startsWith('#/$defs/')) {
+        defName = refValue.slice('#/$defs/'.length);
+      } else if (refValue.startsWith('#/definitions/')) {
+        defName = refValue.slice('#/definitions/'.length);
+      } else if (defs[refValue]) {
+        defName = refValue;
+      }
+      if (defName && defs[defName]) {
+        const resolved = { ...defs[defName] };
+        for (const k of Object.keys(schema)) {
+          if (k !== '$ref' && k !== 'ref') {
+            (resolved as any)[k] = schema[k];
+          }
+        }
+        return resolveRef(resolved, root);
+      }
+    }
+  }
+  if (Array.isArray(schema)) {
+    return schema.map(item => resolveRef(item, root));
+  }
+  if (typeof schema === 'object') {
+    const result: any = {};
+    for (const key of Object.keys(schema)) {
+      result[key] = resolveRef(schema[key], root);
+    }
+    return result;
+  }
+  return schema;
+}
+
 function sanitizeGeminiSchema(schema: any): any {
   if (typeof schema !== 'object' || schema === null) {
     return schema;
   }
 
-  // Create a new object, filtering out unsupported keys at the current level.
+  const resolved = resolveRef(schema, schema);
+
   const newSchema: { [key: string]: any } = {};
-  for (const key in schema) {
-    if (key !== '$schema' && key !== 'additionalProperties') {
-      newSchema[key] = schema[key];
+  for (const key in resolved) {
+    if (!UNSUPPORTED_KEYS.has(key)) {
+      newSchema[key] = resolved[key];
     }
   }
 
-  // Recurse into nested 'properties' and 'items'.
+  if (resolved.exclusiveMinimum !== undefined && newSchema.minimum === undefined) {
+    newSchema.minimum = resolved.exclusiveMinimum;
+  }
+  if (resolved.exclusiveMaximum !== undefined && newSchema.maximum === undefined) {
+    newSchema.maximum = resolved.exclusiveMaximum;
+  }
+
   if (newSchema.properties) {
     const newProperties: { [key: string]: any } = {};
     for (const key in newSchema.properties) {
@@ -267,6 +316,11 @@ export class GeminiApiClient {
 
     if (!lastMessage) {
       throw new Error('No message to send.');
+    }
+
+    // Set the requested model before creating the chat session
+    if (model && typeof model === 'string') {
+      try { this.config.setModel(model); } catch (e) { logger.warn('Failed to set model:', e); }
     }
 
     // Create a new, isolated chat session for each request.

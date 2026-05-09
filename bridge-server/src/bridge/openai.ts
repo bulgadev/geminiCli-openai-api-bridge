@@ -184,6 +184,10 @@ export function createOpenAIRouter(config: Config, debugMode = false): Router {
     res.json({
       object: 'list',
       data: [
+        { id: 'gemini-3.1-pro-preview', object: 'model', owned_by: 'google' },
+        { id: 'gemini-3.1-flash-lite', object: 'model', owned_by: 'google' },
+        { id: 'gemini-3-flash-preview', object: 'model', owned_by: 'google' },
+        { id: 'gemini-3-pro-preview', object: 'model', owned_by: 'google' },
         { id: 'gemini-2.5-pro', object: 'model', owned_by: 'google' },
         { id: 'gemini-2.5-flash', object: 'model', owned_by: 'google' },
       ],
