@@ -3,6 +3,10 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
 
+<p align="center">
+  <img src="assets/OpencodeGemini.png" alt="OpenCode + Gemini CLI Bridge" width="600">
+</p>
+
 OpenAI-compatible API bridge for Google's Gemini CLI. Lets any OpenAI-compatible client (OpenCode, Open WebUI, Cursor, etc.) use Gemini models — including the full CodeAssist API with Google OAuth.
 
 **Built on** [@Intelligent-Internet/gemini-cli-mcp-openai-bridge](https://github.com/Intelligent-Internet/gemini-cli-mcp-openai-bridge) and the [Gemini CLI](https://github.com/google-gemini/gemini-cli).
