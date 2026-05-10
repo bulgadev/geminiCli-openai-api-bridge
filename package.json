@@ -11,12 +11,14 @@
         "gemini-cli/packages/*"
     ],
     "scripts": {
-    "install": "git submodule update --init --recursive && cd gemini-cli && npm install",
-    "port": "rimraf gemini-cli/packages/bridge-server && shx cp -r bridge-server gemini-cli/packages/ && shx cp LICENSE gemini-cli/packages/bridge-server/ && shx cp README.md gemini-cli/packages/bridge-server/ && cd gemini-cli/packages/bridge-server && npm install",
-    "prepare": "npm run install && npm run port",
-    "build": "npm run prepare && npm run build --workspace=@intelligentinternet/gemini-cli-mcp-openai-bridge",
-    "start": "npm start --workspace=@intelligentinternet/gemini-cli-mcp-openai-bridge --",
-    "publish:bridge-server": "cd gemini-cli/packages/bridge-server && npm publish --access public"
+        "install": "git submodule update --init --recursive && cd gemini-cli && npm install",
+        "port": "rimraf gemini-cli/packages/bridge-server && shx cp -r bridge-server gemini-cli/packages/ && shx cp LICENSE gemini-cli/packages/bridge-server/ && shx cp README.md gemini-cli/packages/bridge-server/ && cd gemini-cli/packages/bridge-server && npm install",
+        "prepare": "npm run install && npm run port",
+        "build": "npm run prepare && npm run build --workspace=@intelligentinternet/gemini-cli-mcp-openai-bridge",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "start": "npm start --workspace=@intelligentinternet/gemini-cli-mcp-openai-bridge --",
+        "publish:bridge-server": "cd gemini-cli/packages/bridge-server && npm publish --access public"
     },
     "bin": {
         "gemini-cli-bridge": "gemini-cli/packages/bridge-server/dist/index.js"
@@ -28,7 +30,9 @@
         "NOTICE"
     ],
     "devDependencies": {
+        "@google/genai": "^2.0.1",
         "rimraf": "^6.0.1",
-        "shx": "^0.4.0"
+        "shx": "^0.4.0",
+        "vitest": "^4.1.5"
     }
 }
