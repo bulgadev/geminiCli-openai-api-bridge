@@ -88,9 +88,9 @@ export function createOpenAIStreamTransformer(
           break;
 
         case 'tool_code': {
-          const { name, args } = chunk.data;
-          // IMPORTANT: Embed the function name in the ID so it can be parsed when a tool response is received.
-          const toolCallId = `call_${name}_${randomUUID()}`;
+          const { name, args, thoughtSignature } = chunk.data;
+          const sigPart = thoughtSignature ? `.${thoughtSignature}` : '';
+          const toolCallId = `call.${name}${sigPart}.${randomUUID()}`;
 
           // OpenAI streaming tool calls need to be sent in chunks.
           // 1. Send the chunk containing the function name.

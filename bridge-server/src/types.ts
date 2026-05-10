@@ -60,7 +60,7 @@ export interface ReasoningData {
 export type StreamChunk =
   | { type: 'text'; data: string }
   | { type: 'reasoning'; data: ReasoningData }
-  | { type: 'tool_code'; data: { name: string; args: Record<string, unknown> } };
+  | { type: 'tool_code'; data: { name: string; args: Record<string, unknown>; thoughtSignature?: string } };
 
 /**
  * Defines the structure of an OpenAI API-compatible error object.
