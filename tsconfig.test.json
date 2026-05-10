@@ -6,10 +6,8 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "strict": true,
-    "outDir": "dist",
-    "rootDir": "src",
-    "declaration": true,
-    "sourceMap": true
+    "outDir": "./dist-test",
+    "rootDir": "."
   },
-  "include": ["src/**/*.ts"]
+  "include": ["bridge-server/src/*.ts"]
 }

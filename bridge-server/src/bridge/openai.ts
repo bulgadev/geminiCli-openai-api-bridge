@@ -105,7 +105,8 @@ export function createOpenAIRouter(config: Config, debugMode = false): Router {
           if (chunk.type === 'text' && chunk.data) {
             fullTextContent += chunk.data;
           } else if (chunk.type === 'tool_code' && chunk.data) {
-            const toolCallId = `call_${chunk.data.name}_${randomUUID()}`;
+            const sigPart = chunk.data.thoughtSignature ? `.${chunk.data.thoughtSignature}` : '';
+            const toolCallId = `call.${chunk.data.name}${sigPart}.${randomUUID()}`;
             toolCalls.push({
               id: toolCallId,
               type: 'function',

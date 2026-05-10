@@ -22,6 +22,49 @@ import {
 } from './types.js';
 import { logger } from './utils/logger.js';
 
+export function base64urlEncode(s: string): string {
+  return s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+export function base64urlDecode(s: string): string {
+  let b = s.replace(/-/g, '+').replace(/_/g, '/');
+  const r = b.length % 4;
+  if (r === 2) b += '==';
+  else if (r === 3) b += '=';
+  return b;
+}
+
+export function extractThoughtSigFromId(toolCallId: string): string | null {
+  // Format: call.{name}.{b64sig}.{uuid}
+  const parts = toolCallId.split('.');
+  if (parts.length >= 4 && parts[0] === 'call') {
+    const encoded = parts[2];
+    if (encoded.length >= 5) return base64urlDecode(encoded);
+  }
+  return null;
+}
+
+export function mergeFunctionResponseUserEntries(contents: Content[]): Content[] {
+  const merged: Content[] = [];
+  const isFuncResp = (c: Content) =>
+    c.role === 'user' && c.parts?.length && c.parts.every(p => p.functionResponse);
+  let pending: Content | null = null;
+  for (const content of contents) {
+    if (isFuncResp(content)) {
+      if (pending) {
+        pending.parts!.push(...content.parts!);
+      } else {
+        pending = { role: 'user', parts: [...content.parts!] };
+      }
+    } else {
+      if (pending) { merged.push(pending); pending = null; }
+      merged.push(content);
+    }
+  }
+  if (pending) merged.push(pending);
+  return merged;
+}
+
 const UNSUPPORTED_KEYS = new Set([
   '$schema', '$ref', 'ref', '$defs', 'definitions',
   'additionalProperties', 'patternProperties',
@@ -71,27 +114,21 @@ function resolveRef(schema: any, root: any): any {
   return schema;
 }
 
-function sanitizeGeminiSchema(schema: any): any {
-  if (typeof schema !== 'object' || schema === null) {
-    return schema;
-  }
-
+export function sanitizeGeminiSchema(schema: any): any {
+  if (typeof schema !== 'object' || schema === null) return schema;
   const resolved = resolveRef(schema, schema);
-
   const newSchema: { [key: string]: any } = {};
   for (const key in resolved) {
     if (!UNSUPPORTED_KEYS.has(key)) {
       newSchema[key] = resolved[key];
     }
   }
-
   if (resolved.exclusiveMinimum !== undefined && newSchema.minimum === undefined) {
     newSchema.minimum = resolved.exclusiveMinimum;
   }
   if (resolved.exclusiveMaximum !== undefined && newSchema.maximum === undefined) {
     newSchema.maximum = resolved.exclusiveMaximum;
   }
-
   if (newSchema.properties) {
     const newProperties: { [key: string]: any } = {};
     for (const key in newSchema.properties) {
@@ -99,11 +136,9 @@ function sanitizeGeminiSchema(schema: any): any {
     }
     newSchema.properties = newProperties;
   }
-
   if (newSchema.items) {
     newSchema.items = sanitizeGeminiSchema(newSchema.items);
   }
-
   return newSchema;
 }
 
@@ -118,85 +153,55 @@ export class GeminiApiClient {
     this.debugMode = debugMode;
   }
 
-  /**
-   * Converts OpenAI tool definitions to Gemini tool definitions.
-   */
   private convertOpenAIToolsToGemini(
     openAITools?: OpenAIChatCompletionRequest['tools'],
   ): Tool[] | undefined {
-    if (!openAITools || openAITools.length === 0) {
-      return undefined;
-    }
-
+    if (!openAITools || openAITools.length === 0) return undefined;
     const functionDeclarations: FunctionDeclaration[] = openAITools
       .filter(tool => tool.type === 'function' && tool.function)
-      .map(tool => {
-        const sanitizedParameters = sanitizeGeminiSchema(
-          tool.function.parameters,
-        );
-        return {
-          name: tool.function.name,
-          description: tool.function.description,
-          parameters: sanitizedParameters,
-        };
-      });
-
-    if (functionDeclarations.length === 0) {
-      return undefined;
-    }
-
+      .map(tool => ({
+        name: tool.function.name,
+        description: tool.function.description,
+        parameters: sanitizeGeminiSchema(tool.function.parameters),
+      }));
+    if (functionDeclarations.length === 0) return undefined;
     return [{ functionDeclarations }];
   }
 
-  /**
-   * Parses the original function name from a tool_call_id.
-   * ID format: "call_{functionName}_{uuid}"
-   */
-  private parseFunctionNameFromId(toolCallId: string): string {
-    const parts = toolCallId.split('_');
-    if (parts.length > 2 && parts[0] === 'call') {
-      // Reassemble the function name which might contain underscores.
-      return parts.slice(1, parts.length - 1).join('_');
+  parseFunctionNameFromId(toolCallId: string): string {
+    const parts = toolCallId.split('.');
+    if (parts.length >= 2 && parts[0] === 'call') {
+      return parts[1];
     }
-    // Fallback mechanism, not ideal but better than sending a wrong name.
     return 'unknown_tool_from_id';
   }
 
-  /**
-   * Converts an OpenAI-formatted message to a Gemini-formatted Content object.
-   */
   private openAIMessageToGemini(msg: OpenAIMessage): Content {
-    // Handle assistant messages, which can contain both text and tool calls
     if (msg.role === 'assistant') {
       const parts: Part[] = [];
-
-      // Handle text content. It can be null when tool_calls are present.
       if (msg.content && typeof msg.content === 'string') {
         parts.push({ text: msg.content });
       }
-
-      // Handle tool calls
       if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
         for (const toolCall of msg.tool_calls) {
           if (toolCall.type === 'function' && toolCall.function) {
             try {
-              // Gemini API's functionCall.args expects an object, not a string.
-              // OpenAI's arguments is a JSON string, so it needs to be parsed.
               const argsObject = JSON.parse(toolCall.function.arguments);
-              parts.push({
-                functionCall: {
-                  name: toolCall.function.name,
-                  args: argsObject,
-                },
-              });
+              const fnName = toolCall.function.name;
+              const sig = extractThoughtSigFromId(toolCall.id || '');
+              const part: any = {
+                functionCall: { name: fnName, args: argsObject },
+              };
+              if (sig) {
+                part.thought = true;
+                part.thoughtSignature = sig;
+              } else {
+                part.thoughtSignature = "skip_thought_signature_validator";
+                part.thought = true;
+              }
+              parts.push(part);
             } catch (e) {
-              logger.warn(
-                'Failed to parse tool call arguments',
-                {
-                  arguments: toolCall.function.arguments,
-                },
-                e,
-              );
+              logger.warn('Failed to parse tool call arguments', { arguments: toolCall.function.arguments }, e);
             }
           }
         }
@@ -204,52 +209,29 @@ export class GeminiApiClient {
       return { role: 'model', parts };
     }
 
-    // Handle tool responses
     if (msg.role === 'tool') {
       const functionName = this.parseFunctionNameFromId(msg.tool_call_id || '');
       let responsePayload: Record<string, unknown>;
-
       try {
         const parsed = JSON.parse(msg.content as string);
-
-        // The Gemini API expects an object for the response.
-        // If the parsed content is a non-null, non-array object, use it directly.
-        // Otherwise, wrap primitives, arrays, or null in an object.
-        if (
-          typeof parsed === 'object' &&
-          parsed !== null &&
-          !Array.isArray(parsed)
-        ) {
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
           responsePayload = parsed as Record<string, unknown>;
         } else {
           responsePayload = { output: parsed };
         }
       } catch (e) {
-        // If parsing fails, it's a plain string. Wrap it.
         responsePayload = { output: msg.content };
       }
-
       return {
-        role: 'user', // A tool response must be in a 'user' role message for Gemini API history.
-        parts: [
-          {
-            functionResponse: {
-              name: functionName,
-              // Pass the parsed or wrapped object as the response value.
-              response: responsePayload,
-            },
-          },
-        ],
+        role: 'user',
+        parts: [{ functionResponse: { name: functionName, response: responsePayload } }],
       };
     }
 
-    // Handle user and system messages
-    const role = 'user'; // system and user roles are mapped to 'user'
-
+    const role = 'user';
     if (typeof msg.content === 'string') {
       return { role, parts: [{ text: msg.content }] };
     }
-
     if (Array.isArray(msg.content)) {
       const parts = msg.content.reduce<Part[]>((acc, part: MessageContentPart) => {
         if (part.type === 'text') {
@@ -261,22 +243,16 @@ export class GeminiApiClient {
             const mimeType = mimePart.split(':')[1].split(';')[0];
             acc.push({ inlineData: { mimeType, data: dataPart } });
           } else {
-            // Gemini API prefers inlineData, but fileData is a possible fallback.
             acc.push({ fileData: { mimeType: 'image/jpeg', fileUri: imageUrl } });
           }
         }
         return acc;
       }, []);
-
       return { role, parts };
     }
-
     return { role, parts: [{ text: '' }] };
   }
 
-  /**
-   * Sends a streaming request to the Gemini API.
-   */
   public async sendMessageStream({
     model,
     messages,
@@ -289,100 +265,75 @@ export class GeminiApiClient {
     tool_choice?: any;
   }): Promise<AsyncGenerator<StreamChunk>> {
     let clientSystemInstruction: Content | undefined = undefined;
-    const useInternalPrompt = !!this.config.getUserMemory(); // Check if there is a prompt from GEMINI.md
+    const useInternalPrompt = !!this.config.getUserMemory();
 
-    // If not using the internal prompt, treat the client's system prompt as the system instruction.
     if (!useInternalPrompt) {
       const systemMessageIndex = messages.findIndex(msg => msg.role === 'system');
       if (systemMessageIndex !== -1) {
-        // Splice returns an array of removed items, so we take the first one.
         const systemMessage = messages.splice(systemMessageIndex, 1)[0];
         clientSystemInstruction = this.openAIMessageToGemini(systemMessage);
       }
     }
-    // If using internal prompt, the system message from the client (if any)
-    // will be converted to a 'user' role message by openAIMessageToGemini,
-    // effectively merging it into the conversation history.
 
-    const history = messages.map(msg => this.openAIMessageToGemini(msg));
+    const history = mergeFunctionResponseUserEntries(
+      messages.map(msg => this.openAIMessageToGemini(msg)),
+    );
     const lastMessage = history.pop();
 
     logger.info('Calling Gemini API', { model });
+    logger.debug(this.debugMode, 'Sending request to Gemini', { historyLength: history.length, lastMessage });
 
-    logger.debug(this.debugMode, 'Sending request to Gemini', {
-      historyLength: history.length,
-      lastMessage,
-    });
+    if (!lastMessage) throw new Error('No message to send.');
 
-    if (!lastMessage) {
-      throw new Error('No message to send.');
-    }
-
-    // Set the requested model before creating the chat session
     if (model && typeof model === 'string') {
       try { this.config.setModel(model); } catch (e) { logger.warn('Failed to set model:', e); }
     }
 
-    // Create a new, isolated chat session for each request.
-    const oneShotChat = new GeminiChat(
-      this.config,
-      this.contentGenerator,
-      {},
-      history,
-    );
-
+    const oneShotChat = new GeminiChat(this.config, this.contentGenerator, {}, history);
     const geminiTools = this.convertOpenAIToolsToGemini(tools);
-
     const generationConfig: GenerateContentConfig = {};
-    // If a system prompt was extracted from the client's request, use it. This
-    // will override any system prompt set in the GeminiChat instance.
     if (clientSystemInstruction) {
       generationConfig.systemInstruction = clientSystemInstruction;
     }
-
     if (tool_choice && tool_choice !== 'auto') {
       generationConfig.toolConfig = {
         functionCallingConfig: {
-          mode:
-            tool_choice.type === 'function'
-              ? FunctionCallingConfigMode.ANY
-              : FunctionCallingConfigMode.AUTO,
-          allowedFunctionNames: tool_choice.function
-            ? [tool_choice.function.name]
-            : undefined,
+          mode: tool_choice.type === 'function' ? FunctionCallingConfigMode.ANY : FunctionCallingConfigMode.AUTO,
+          allowedFunctionNames: tool_choice.function ? [tool_choice.function.name] : undefined,
         },
       };
     }
 
-    
     const prompt_id = Math.random().toString(16).slice(2);
     const geminiStream = await oneShotChat.sendMessageStream({
       message: lastMessage.parts || [],
-      config: {
-        tools: geminiTools,
-        ...generationConfig,
-      },
+      config: { tools: geminiTools, ...generationConfig },
     }, prompt_id);
 
     logger.debug(this.debugMode, 'Got stream from Gemini.');
 
-    // Transform the event stream to a simpler StreamChunk stream
     return (async function* (): AsyncGenerator<StreamChunk> {
+      let pendingThoughtSig: string | null = null;
       for await (const response of geminiStream) {
         const parts = response.candidates?.[0]?.content?.parts || [];
         for (const part of parts) {
+          const partAny = part as any;
+          const sig = partAny.thoughtSignature || null;
+          if (sig) pendingThoughtSig = sig;
           if (part.text) {
             yield { type: 'text', data: part.text };
           }
           if (part.functionCall && part.functionCall.name) {
+            const fnName = part.functionCall.name;
+            const toolSig = pendingThoughtSig ? base64urlEncode(pendingThoughtSig) : undefined;
             yield {
               type: 'tool_code',
               data: {
-                name: part.functionCall.name,
-                args:
-                  (part.functionCall.args as Record<string, unknown>) ?? {},
-              },
-            };
+                name: fnName,
+                args: (part.functionCall.args as Record<string, unknown>) ?? {},
+                thoughtSignature: toolSig,
+              } as { name: string; args: Record<string, unknown>; thoughtSignature?: string },
+            } as StreamChunk;
           }
         }
       }

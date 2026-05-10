@@ -83,7 +83,8 @@ export function createOpenAIRouter(config, debugMode = false) {
                         fullTextContent += chunk.data;
                     }
                     else if (chunk.type === 'tool_code' && chunk.data) {
-                        const toolCallId = `call_${chunk.data.name}_${randomUUID()}`;
+                        const sigPart = chunk.data.thoughtSignature ? `.${chunk.data.thoughtSignature}` : '';
+                        const toolCallId = `call.${chunk.data.name}${sigPart}.${randomUUID()}`;
                         toolCalls.push({
                             id: toolCallId,
                             type: 'function',
@@ -166,4 +167,3 @@ export function createOpenAIRouter(config, debugMode = false) {
     });
     return router;
 }
-//# sourceMappingURL=openai.js.map
